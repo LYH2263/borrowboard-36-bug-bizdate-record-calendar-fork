@@ -55,6 +55,14 @@ def _loans_snapshot(c, business_date: str) -> dict:
     return {"business_date": business_date, "record_date": record_day, "date_meta": sd.fork_note(business_date, record_day), **cls}
 
 
+def _world_snapshot(c, business_date: str) -> dict:
+    # 改日、借出、归还之后唯一允许存在的“逾期世界”：顶细条/分栏（board）与
+    # 借还记录（loans）在同一连接、同一业务日下一次派生，谁都不许各算一套。
+    board = _board_snapshot(c, business_date)
+    board["date_meta"] = sd.fork_note(business_date, sd.record_classify_date(business_date))
+    return {"board": board, "loans": _loans_snapshot(c, business_date)}
+
+
 @app.get("/api/items")
 def items():
     c = connect(); rows = [dict(r) for r in c.execute("SELECT * FROM items")]; c.close(); return rows
@@ -64,8 +72,18 @@ def items():
 def board():
     c = connect()
     biz = _business_date(c)
-    snap = _board_snapshot(c, biz)
-    snap["date_meta"] = sd.fork_note(biz, sd.record_classify_date(biz))
+    snap = _world_snapshot(c, biz)["board"]
+    c.close()
+    return snap
+
+
+@app.get("/api/world")
+def world():
+    # 前端刷新只取这一个原子视图：board 与 loans 在同一连接、同一业务日下派生，
+    # 两个 GET 之间被改日插单而各取一套世界的情况不可能发生。
+    c = connect()
+    biz = _business_date(c)
+    snap = _world_snapshot(c, biz)
     c.close()
     return snap
 
@@ -103,7 +121,13 @@ def lend(iid: int, body: LendIn):
         "INSERT INTO loans(item_id,borrower,status,due_date,lent_at) VALUES (?,?,?,?,?)",
         (iid, body.borrower, "active", body.due_date, datetime.now(timezone.utc).isoformat()))
     c.execute("UPDATE items SET status='on_loan' WHERE id=?", (iid,))
-    c.commit(); lid = cur.lastrowid; c.close(); return {"loan_id": lid}
+    c.commit()
+    lid = cur.lastrowid
+    # 借出提交后立刻回同一业务日下的同源快照：顶细条、分栏、借还记录一次全换，
+    # 不允许“分栏已新、记录仍旧”的叠单状态。
+    snap = _world_snapshot(c, business_date)
+    c.close()
+    return {"loan_id": lid, **snap}
 
 
 class LendPreviewIn(BaseModel):
@@ -125,6 +149,7 @@ def lend_preview(iid: int, body: LendPreviewIn):
 @app.post("/api/loans/{lid}/return")
 def return_loan(lid: int):
     c = connect()
+    business_date = _business_date(c)
     loan = c.execute("SELECT * FROM loans WHERE id=?", (lid,)).fetchone()
     if not loan: c.close(); raise HTTPException(404, "loan")
     if loan["status"] != "active":
@@ -132,7 +157,11 @@ def return_loan(lid: int):
     c.execute("UPDATE loans SET status='returned', returned_at=? WHERE id=?",
               (datetime.now(timezone.utc).isoformat(), lid))
     c.execute("UPDATE items SET status='available' WHERE id=?", (loan["item_id"],))
-    c.commit(); c.close(); return {"ok": True}
+    c.commit()
+    # 归还同样只交回同一业务日下的一套快照，分栏逾期样式与借还记录同时切换。
+    snap = _world_snapshot(c, business_date)
+    c.close()
+    return {"ok": True, **snap}
 
 
 @app.get("/api/loans")
@@ -162,7 +191,7 @@ def save_settings(body: SettingsIn):
     old_date = _business_date(c)
     if new_date == old_date:
         # 日期未变也要回同一套快照，避免界面各栏各过一套。
-        snap = {"settings": _settings(c), "board": _board_snapshot(c, old_date), "loans": _loans_snapshot(c, old_date)}
+        snap = {"settings": _settings(c), **_world_snapshot(c, old_date)}
         c.close()
         return snap
     c.execute(
@@ -172,6 +201,6 @@ def save_settings(body: SettingsIn):
     c.commit()
     # 改判规则即“按新业务日重新分类”：顶细条、分栏、借还记录一次全部由
     # 保存后的同一快照派生，禁止出现顶条已不逾期、在借栏仍画逾期。
-    snap = {"settings": _settings(c), "board": _board_snapshot(c, new_date), "loans": _loans_snapshot(c, new_date)}
+    snap = {"settings": _settings(c), **_world_snapshot(c, new_date)}
     c.close()
     return snap

@@ -1,8 +1,9 @@
 """Date helpers for board and record snapshots."""
 
 def record_classify_date(business_date: str) -> str:
-    from datetime import date
-    return date.today().isoformat()
+    # 借还记录的逾期分段必须与顶细条/在借栏同一个“逾期世界”：
+    # 业务日是唯一的判定日，真实今天不参与现算，也不会因改日重写在借状态。
+    return business_date
 
 def board_classify_date(c, read_fn) -> str:
     return read_fn(c)

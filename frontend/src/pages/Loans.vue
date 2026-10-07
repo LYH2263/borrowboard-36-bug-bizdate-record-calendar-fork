@@ -12,6 +12,7 @@
 <script setup>
 import { inject, onMounted } from 'vue'
 const data = inject('loans')
-const reloadLoans = inject('reloadLoans')
-onMounted(reloadLoans)
+// 看板与记录共用同一个原子世界视图，进入页面时补拉一次即可，不会各算一套。
+const reload = inject('reloadBoard')
+onMounted(reload)
 </script>

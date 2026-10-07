@@ -29,6 +29,8 @@ import { inject, reactive, watch } from 'vue'
 import { api } from '../api'
 const board = inject('board')
 const reload = inject('reloadBoard')
+const applyWorld = inject('applyWorld')
+const nextWorldSeq = inject('nextWorldSeq')
 const forms = reactive({})
 const elig = reactive({})        // id -> 服务端按当前业务日给出的预演结果
 const submitErr = reactive({})
@@ -76,19 +78,25 @@ watch(board, (b, old) => {
 async function lend(id) {
   if (!elig[id] || !elig[id].ok) return
   submitErr[id] = ''
+  // 叠单防护：借出与改日并发时，只接受这一单序号对应的新世界。
+  const seq = nextWorldSeq()
+  let snap
   try {
-    await api('/items/' + id + '/lend', { method: 'POST', body: JSON.stringify(forms[id]) })
+    snap = await api('/items/' + id + '/lend', { method: 'POST', body: JSON.stringify(forms[id]) })
   } catch (e) {
-    // 提交瞬间业务日已变导致服务端拒绝：以服务端结果重新拉齐后重检。
+    // 提交瞬间业务日已变导致服务端拒绝：以服务端当前世界重新拉齐后重检。
     submitErr[id] = '提交时业务日已变化，已按新业务日重新判定：' + (REASONS[e.message] || e.message)
     await reload()
     schedulePreview(id)
     return
   }
-  await reload()
+  // 顶细条、分栏逾期样式、借还记录逾期段同包落屏；响应迟到（期间又改日/借还）
+  // 则整包丢弃并重新拉齐，绝不留半套世界。
+  if (!applyWorld(snap, seq)) await reload()
 }
 async function ret(id) {
-  await api('/loans/' + id + '/return', { method: 'POST', body: '{}' })
-  await reload()
+  const seq = nextWorldSeq()
+  const snap = await api('/loans/' + id + '/return', { method: 'POST', body: '{}' })
+  if (!applyWorld(snap, seq)) await reload()
 }
 </script>
