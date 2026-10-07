@@ -20,33 +20,28 @@
 import { ref, onMounted, provide } from 'vue'
 import { api } from './api'
 const counts = ref({})
-const bizFork = ref(true)
-const recordDay = ref('')
 const board = ref({ business_date: '', available: [], active: [], overdue: [] })
 const loans = ref({ business_date: '', active: [], overdue: [], returned: [] })
-async function load() {
-  board.value = await api('/board')
-  counts.value = board.value.counts || {}
-  bizFork.value = !!(board.value.date_meta && board.value.date_meta.forked)
-  recordDay.value = board.value.date_meta?.record_date || ''
-}
-async function loadLoans() {
-  loans.value = await api('/loans')
-  recordDay.value = loans.value.date_meta?.record_date || loans.value.record_date || ''
-  bizFork.value = !!(loans.value.date_meta && loans.value.date_meta.forked)
-}
-// 设置保存成功后，顶细条、分栏、借还记录一次换成保存结果，杜绝各栏各算一套。
-function applySavedSnapshot(snap) {
+// 初始加载、设置保存、借出、归还都落到这同一个入口：响应里服务端已按
+// 同一业务日派生好顶细条、分栏、借还记录，一次换齐，只允许一种逾期世界。
+function applySnapshot(snap) {
+  if (!snap) return
   if (snap.board) {
     board.value = snap.board
     counts.value = snap.board.counts || {}
   }
   if (snap.loans) loans.value = snap.loans
 }
+async function load() {
+  applySnapshot(await api('/snapshot'))
+}
+async function loadLoans() {
+  loans.value = await api('/loans')
+}
 provide('board', board)
 provide('loans', loans)
 provide('reloadBoard', load)
 provide('reloadLoans', loadLoans)
-provide('applySavedSnapshot', applySavedSnapshot)
+provide('applySnapshot', applySnapshot)
 onMounted(load)
 </script>

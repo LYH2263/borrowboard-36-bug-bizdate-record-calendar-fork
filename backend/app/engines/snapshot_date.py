@@ -1,8 +1,9 @@
 """Date helpers for board and record snapshots."""
 
 def record_classify_date(business_date: str) -> str:
-    from datetime import date
-    return date.today().isoformat()
+    # 借还记录的分类日就是业务日本身：与顶细条、分栏同源，
+    # 全应用只允许一种逾期世界，不存在“记录按真实今天另算一套”。
+    return business_date
 
 def board_classify_date(c, read_fn) -> str:
     return read_fn(c)

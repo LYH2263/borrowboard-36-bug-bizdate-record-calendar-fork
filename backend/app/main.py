@@ -50,9 +50,24 @@ def _board_snapshot(c, business_date: str) -> dict:
 def _loans_snapshot(c, business_date: str) -> dict:
     rows = [dict(r) for r in c.execute(
         "SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id ORDER BY loans.id DESC")]
+    # 借还记录与顶细条、分栏按同一个业务日分类，不另起一套日期。
     record_day = sd.record_classify_date(business_date)
     cls = classify_loans(rows, record_day)
     return {"business_date": business_date, "record_date": record_day, "date_meta": sd.fork_note(business_date, record_day), **cls}
+
+
+def _full_snapshot(c, business_date: str) -> dict:
+    # 设置、顶细条、分栏、借还记录全部从这一次连接、这一个业务日派生：
+    # 改日、借出、归还的响应都带它，全应用只允许一种逾期世界。
+    return {"settings": _settings(c), "board": _board_snapshot(c, business_date), "loans": _loans_snapshot(c, business_date)}
+
+
+@app.get("/api/snapshot")
+def snapshot():
+    c = connect()
+    snap = _full_snapshot(c, _business_date(c))
+    c.close()
+    return snap
 
 
 @app.get("/api/items")
@@ -103,7 +118,10 @@ def lend(iid: int, body: LendIn):
         "INSERT INTO loans(item_id,borrower,status,due_date,lent_at) VALUES (?,?,?,?,?)",
         (iid, body.borrower, "active", body.due_date, datetime.now(timezone.utc).isoformat()))
     c.execute("UPDATE items SET status='on_loan' WHERE id=?", (iid,))
-    c.commit(); lid = cur.lastrowid; c.close(); return {"loan_id": lid}
+    c.commit(); lid = cur.lastrowid
+    # 借出落库后回同一套快照：顶细条、分栏、借还记录一次全部按当前业务日派生。
+    snap = _full_snapshot(c, _business_date(c))
+    c.close(); return {"loan_id": lid, **snap}
 
 
 class LendPreviewIn(BaseModel):
@@ -132,7 +150,10 @@ def return_loan(lid: int):
     c.execute("UPDATE loans SET status='returned', returned_at=? WHERE id=?",
               (datetime.now(timezone.utc).isoformat(), lid))
     c.execute("UPDATE items SET status='available' WHERE id=?", (loan["item_id"],))
-    c.commit(); c.close(); return {"ok": True}
+    c.commit()
+    # 归还落库后同样回整套快照，与改日、借出保持同一种逾期世界。
+    snap = _full_snapshot(c, _business_date(c))
+    c.close(); return {"ok": True, **snap}
 
 
 @app.get("/api/loans")
@@ -160,18 +181,15 @@ def save_settings(body: SettingsIn):
         raise HTTPException(400, "invalid_business_date")
     c = connect()
     old_date = _business_date(c)
-    if new_date == old_date:
-        # 日期未变也要回同一套快照，避免界面各栏各过一套。
-        snap = {"settings": _settings(c), "board": _board_snapshot(c, old_date), "loans": _loans_snapshot(c, old_date)}
-        c.close()
-        return snap
-    c.execute(
-        "INSERT INTO settings(key,value) VALUES (?,?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (BUSINESS_DATE_KEY, new_date))
-    c.commit()
-    # 改判规则即“按新业务日重新分类”：顶细条、分栏、借还记录一次全部由
-    # 保存后的同一快照派生，禁止出现顶条已不逾期、在借栏仍画逾期。
-    snap = {"settings": _settings(c), "board": _board_snapshot(c, new_date), "loans": _loans_snapshot(c, new_date)}
+    if new_date != old_date:
+        # 只写设置本身；物件在借状态由 items.status 决定，改日绝不动它。
+        c.execute(
+            "INSERT INTO settings(key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (BUSINESS_DATE_KEY, new_date))
+        c.commit()
+    # 改判规则即“按业务日重新分类”：无论日期是否变化，都回保存后的同一套
+    # 快照，顶细条、分栏、借还记录一次全部派生，禁止顶条已不逾期、记录仍画逾期。
+    snap = _full_snapshot(c, _business_date(c))
     c.close()
     return snap

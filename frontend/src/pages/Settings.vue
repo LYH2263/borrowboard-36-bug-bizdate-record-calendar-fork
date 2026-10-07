@@ -19,7 +19,7 @@ const businessDate = ref('')
 const savedDate = ref('')
 const msg = ref('')
 const err = ref(false)
-const applySavedSnapshot = inject('applySavedSnapshot')
+const applySnapshot = inject('applySnapshot')
 
 async function load() {
   const settings = await api('/settings')
@@ -37,16 +37,15 @@ async function save() {
       method: 'POST', body: JSON.stringify({ business_date: businessDate.value }),
     })
     // 顶细条、分栏、借还记录一次跟保存结果（同一服务端快照）。
-    applySavedSnapshot(snap)
+    applySnapshot(snap)
     s.value = JSON.stringify(snap.settings, null, 2)
     savedDate.value = snap.settings.business_date
     businessDate.value = savedDate.value
     msg.value = '已保存，业务日 ' + savedDate.value + ' 已写入'
-    if (snap.loans?.date_meta) msg.value += ' · ' + (snap.loans.date_meta.record_date || '')
   } catch (e) {
     // 非法日期：服务端未落库，本地输入也回到改前的业务日。
     businessDate.value = before
-    err = true
+    err.value = true
     msg.value = '业务日非法，已回到改前值（' + before + '）：' + e.message
   }
 }

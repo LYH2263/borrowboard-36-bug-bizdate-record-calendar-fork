@@ -29,6 +29,8 @@ import { inject, reactive, watch } from 'vue'
 import { api } from '../api'
 const board = inject('board')
 const reload = inject('reloadBoard')
+const reloadLoans = inject('reloadLoans')
+const applySnapshot = inject('applySnapshot')
 const forms = reactive({})
 const elig = reactive({})        // id -> 服务端按当前业务日给出的预演结果
 const submitErr = reactive({})
@@ -77,18 +79,19 @@ async function lend(id) {
   if (!elig[id] || !elig[id].ok) return
   submitErr[id] = ''
   try {
-    await api('/items/' + id + '/lend', { method: 'POST', body: JSON.stringify(forms[id]) })
+    const snap = await api('/items/' + id + '/lend', { method: 'POST', body: JSON.stringify(forms[id]) })
+    // 借出响应自带同一业务日下的整套快照：顶细条、分栏、借还记录一次换齐。
+    applySnapshot(snap)
   } catch (e) {
-    // 提交瞬间业务日已变导致服务端拒绝：以服务端结果重新拉齐后重检。
+    // 提交瞬间业务日已变导致服务端拒绝：以服务端当前状态重新拉齐后重检。
     submitErr[id] = '提交时业务日已变化，已按新业务日重新判定：' + (REASONS[e.message] || e.message)
     await reload()
+    await reloadLoans()
     schedulePreview(id)
-    return
   }
-  await reload()
 }
 async function ret(id) {
-  await api('/loans/' + id + '/return', { method: 'POST', body: '{}' })
-  await reload()
+  const snap = await api('/loans/' + id + '/return', { method: 'POST', body: '{}' })
+  applySnapshot(snap)
 }
 </script>
